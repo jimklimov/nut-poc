@@ -1,0 +1,209 @@
+name: "GHA-01-c: Tarballs - Publish"
+
+on:
+  workflow_run:
+    # NOTE: Defined in 01b-make-dist-build.yml
+    workflows: ["GHA-01-b: Tarballs - Build"]
+    types:
+      - completed
+
+permissions:
+  checks: write
+  actions: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  # Note this is used for both PR builds and e.g. master branch iterations
+  # after merges are pushed into the upstream.
+  make-dist-tarballs-upload:
+    name: "Publish the made Dist and Docs Tarballs, see workflow page for links"
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+
+    steps:
+    # https://securitylab.github.com/resources/github-actions-preventing-pwn-requests/
+    - name: 'Download artifacts built by unprivileged workflow - CI refs'
+      uses: actions/github-script@v6
+      with:
+        script: |
+            var artifacts = await github.actions.listWorkflowRunArtifacts({
+               owner: context.repo.owner,
+               repo: context.repo.repo,
+               run_id: ${{github.event.workflow_run.id }},
+            });
+            var matchArtifact = artifacts.data.artifacts.filter((artifact) => {
+              return artifact.name == "ci-refs"
+            })[0];
+            var download = await github.actions.downloadArtifact({
+               owner: context.repo.owner,
+               repo: context.repo.repo,
+               artifact_id: matchArtifact.id,
+               archive_format: 'zip',
+            });
+            var fs = require('fs');
+            fs.writeFileSync('${{github.workspace}}/ci-refs.zip', Buffer.from(download.data));
+
+    - name: Unpack and validate CI refs
+      run: |
+        unzip ci-refs.zip || exit
+        # Validate: PR-<NUM> or branch/tag name or hash:
+        test -s .ci.gh-refs-subst-github-ref-name.txt || exit
+        # Validate: git hash string:
+        test -s .ci.gh-refs-subst-github-ref-sha.txt || exit
+        # 'tag', etc.
+        test -s .ci.gh-refs-subst-github-ref-type.txt || exit
+        # Validate: Empty (not a PR) or positive number:
+        test -s .ci.gh-refs-issue_number.txt -a "`cat .ci.gh-refs-issue_number.txt`" -gt 0 || test ! -s .ci.gh-refs-issue_number.txt || exit
+
+    - name: Read subst-github-ref-name
+      # Same name as in other pipelines which actually "subst" the value,
+      # to keep consumers structured in a similar manner:
+      id: subst-github-ref-name
+      run: echo "result=`cat .ci.gh-refs-subst-github-ref-name.txt`" >> "$GITHUB_OUTPUT"
+
+    - name: Read subst-github-ref-sha
+      id: subst-github-ref-sha
+      run: echo "result=`cat .ci.gh-refs-subst-github-ref-sha.txt`" >> "$GITHUB_OUTPUT"
+
+    - name: Read subst-github-ref-type
+      id: subst-github-ref-type
+      run: echo "result=`cat .ci.gh-refs-subst-github-ref-type.txt`" >> "$GITHUB_OUTPUT"
+
+    - name: Read subst-github-issue_number
+      id: subst-github-issue_number
+      run: echo "result=`cat .ci.gh-refs-issue_number.txt`" >> "$GITHUB_OUTPUT"
+
+    - name: Debug PR/branch identification in the workflow
+      run: |
+        echo "steps.subst-github-ref-name.outputs.result='${{ steps.subst-github-ref-name.outputs.result }}'" || true
+        echo "steps.subst-github-ref-sha.outputs.result='${{ steps.subst-github-ref-sha.outputs.result }}'" || true
+        echo "steps.subst-github-ref-type.outputs.result='${{ steps.subst-github-ref-type.outputs.result }}'" || true
+        echo "steps.subst-github-issue_number.outputs.result='${{ steps.subst-github-issue_number.outputs.result }}'" || true
+        echo "=== Some or all of the values below may be unresolvable in workflow context:"
+        echo "github.event.pull_request.number='${{ github.event.pull_request.number }}'" || true
+        echo "format('PR-{0}', github.event.pull_request.number)='${{ format('PR-{0}', github.event.pull_request.number) }}'" || true
+        echo "github.head_ref='${{ github.head_ref }}'" || true
+        echo "github.ref='${{ github.ref }}'" || true
+        echo "github.ref_name='${{ github.ref_name }}'" || true
+        echo "env.GITHUB_REF_TYPE='${{ env.GITHUB_REF_TYPE }}' || true
+
+    # Inspired by https://javahelps.com/manage-github-artifact-storage-quota
+    # Note that the code below wipes everything matched by the filter!
+    # We may want another script block (after this cleanup of obsolete data)
+    # to iterate clearing the way build by build until there's X MB available
+    # (at least 300KB as of Nov 2025).
+    - if: env.GITHUB_REF_TYPE != 'tag' && steps.subst-github-ref-name.outputs.result != 'master' && github.event.workflow_run.conclusion == 'success'
+      name: Delete Old Artifacts for this feature branch/PR
+      uses: actions/github-script@v6
+      id: delete_old_artifact_for_pr
+      continue-on-error: true
+      with:
+        script: |
+          const res = await github.rest.actions.listArtifactsForRepo({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+          })
+
+          res.data.artifacts
+            .filter(({ name }) => name === 'WMNUT-tarballs-${{ steps.subst-github-ref-name.outputs.result }}')
+            .forEach(({ id }) => {
+              github.rest.actions.deleteArtifact({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                artifact_id: id,
+              })
+            })
+
+    - name: 'Download artifacts built by unprivileged workflow - Tarballs'
+      if: github.event.workflow_run.conclusion == 'success'
+      uses: actions/github-script@v6
+      with:
+        script: |
+            var artifacts = await github.actions.listWorkflowRunArtifacts({
+               owner: context.repo.owner,
+               repo: context.repo.repo,
+               run_id: ${{github.event.workflow_run.id }},
+            });
+            var matchArtifact = artifacts.data.artifacts.filter((artifact) => {
+              return artifact.name == "WMNUT-tarballs-${{ steps.subst-github-ref-name.outputs.result }}"
+            })[0];
+            var download = await github.actions.downloadArtifact({
+               owner: context.repo.owner,
+               repo: context.repo.repo,
+               artifact_id: matchArtifact.id,
+               archive_format: 'zip',
+            });
+            var fs = require('fs');
+            fs.writeFileSync('${{github.workspace}}/ci-tarballs.zip', Buffer.from(download.data));
+
+    # Seems we have to fetch those tarballs in the ZIP artifact, unpack and re-pack them
+    # On the up-side, this somewhat filters a possible maliciouly broken ZIP file format...
+    - name: Unpack tarballs
+      if: github.event.workflow_run.conclusion == 'success'
+      run: unzip ci-tarballs.zip
+
+    - name: Upload tarball and its checksum artifacts
+      if: github.event.workflow_run.conclusion == 'success'
+      uses: actions/upload-artifact@v4
+      id: upload_artifact
+      with:
+        name: NUT-tarballs-${{ steps.subst-github-ref-name.outputs.result }}
+        path: |
+          nut-*.tar*
+        compression-level: 0
+        overwrite: true
+
+    # NOTE: Despite the docs examples, due to GH API changes in Mar 2025
+    # this action can no longer update an existing check, only create a
+    # new one. Also calls authenticated with "github-actions" GH App may
+    # not set "details_url" freely...
+    # https://docs.github.com/en/rest/checks/runs?apiVersion=2022-11-28
+    - name: "GHA-01-c: Create new GH Check success report - shell/cURL"
+      if: github.event.workflow_run.conclusion == 'success'
+      continue-on-error: true
+      env:
+        artifact_name: "NUT-tarballs-${{ steps.subst-github-ref-name.outputs.result }}.zip"
+        artifact_url: ${{ steps.upload_artifact.outputs.artifact-url }}
+        ref: ${{ steps.subst-github-ref-sha.outputs.result }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        curl -L \
+          -X POST \
+          -H "Accept: application/vnd.github+json" \
+          -H "Authorization: Bearer ${{ env.GITHUB_TOKEN }}" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          https://api.github.com/repos/${{ github.repository }}/check-runs \
+          -d '{"head_sha": "${{ env.ref }}", "name": "URL for ${{ env.artifact_name }}", "details_url": "${{ env.artifact_url }}", "status": "completed", "conclusion": "${{ github.event.workflow_run.conclusion }}", "output": {"title": "${{ env.artifact_url }}", "summary": "Dist and Docs [${{ env.artifact_name }}](${{ env.artifact_url }}) are available for commit ${{ env.ref }}"} }'
+
+    - name: "GHA-01-c: Create new GH Check failure report - shell/cURL"
+      if: github.event.workflow_run.conclusion != 'success'
+      continue-on-error: true
+      env:
+        ref: ${{ steps.subst-github-ref-sha.outputs.result }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        curl -L \
+          -X POST \
+          -H "Accept: application/vnd.github+json" \
+          -H "Authorization: Bearer ${{ env.GITHUB_TOKEN }}" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          https://api.github.com/repos/${{ github.repository }}/check-runs \
+          -d '{"head_sha": "${{ env.ref }}", "name": "Download URL not available", "status": "completed", "conclusion": "${{ github.event.workflow_run.conclusion }}", "output": {"title": "Download URL not available", "summary": "Dist and Docs archives are NOT available for commit ${{ env.ref }}"} }'
+
+    - name: "GHA-01: Create/update new GH PR comment with link"
+      if: github.event.workflow_run.conclusion == 'success' && steps.subst-github-subst-github-issue_number.outputs.result > 0
+      continue-on-error: true
+      env:
+        artifact_name: "NUT-tarballs-${{ steps.subst-github-ref-name.outputs.result }}.zip"
+        artifact_url: ${{ steps.upload_artifact.outputs.artifact-url }}
+        ref: ${{ steps.subst-github-ref-sha.outputs.result }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      uses: thollander/actions-comment-pull-request@v3
+      with:
+        message: |
+            A ZIP file with standard source tarball and another tarball with pre-built docs for commit ${{ env.ref }} is temporarily available: [${{ env.artifact_name }}](${{ env.artifact_url }}).
+        comment-tag: tarball-url
+        github-token: ${{ env.GITHUB_TOKEN }}
