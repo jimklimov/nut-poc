@@ -66,6 +66,7 @@ jobs:
         workflow: "GHA-01: Tarballs Build Worker"
         token: ${{ secrets.GITHUB_TOKEN }}
         inputs: '{ "ref": "${{ github.event.pull_request.number > 0 && github.event.pull_request.head.sha || github.sha }}", "artifact_name": "NUT-tarballs-${{ steps.subst-github-ref-name.outputs.result }}" }'
+        wait-timeout-seconds: 3600
         wait-for-completion: true
         sync-status: true
 
@@ -111,7 +112,7 @@ jobs:
 
           if (artifacts.length > 0) {
             const artifact = artifacts[0];
-            var workflowRunId = artifact.workflow_run_id || steps.launch_worker.outputs.runId;
+            var workflowRunId = artifact.workflow_run_id || ${{ steps.launch_worker.outputs.runId }};
             core.setOutput('artifact_url', `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${workflowRunId}/artifacts/${artifact.id}`);
             core.setOutput('real_artifact_url', `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${workflowRunId}/artifacts/${artifact.id}`);
           } else {
