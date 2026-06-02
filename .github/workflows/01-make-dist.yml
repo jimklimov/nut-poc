@@ -111,8 +111,9 @@ jobs:
 
           if (artifacts.length > 0) {
             const artifact = artifacts[0];
-            core.setOutput('artifact_url', `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${artifact.workflow_run_id}/artifacts/${artifact.id}`);
-            core.setOutput('real_artifact_url', `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${artifact.workflow_run_id}/artifacts/${artifact.id}`);
+            var workflowRunId = artifact.workflow_run_id || steps.launch_worker.outputs.runId;
+            core.setOutput('artifact_url', `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${workflowRunId}/artifacts/${artifact.id}`);
+            core.setOutput('real_artifact_url', `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${workflowRunId}/artifacts/${artifact.id}`);
           } else {
             core.setFailed(`Artifact ${artifactName} not found`);
           }
