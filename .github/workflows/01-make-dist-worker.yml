@@ -1,0 +1,97 @@
+# Separated from 01-make-dist.yml to touch untrusted sources
+# in a separate job without particular permissions to anything.
+# Triggered by a step in that job.
+#
+# See also:
+#   https://github.com/actions/upload-artifact
+#   https://docs.github.com/en/actions/reference/workflows-and-actions/variables
+#   https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
+
+name: "GHA-01: Tarballs Build Worker"
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        required: true
+        type: string
+      artifact_name:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      ref:
+        required: true
+        type: string
+      artifact_name:
+        required: true
+        type: string
+
+# This untrusted part of the job may only read Git
+# (and upload artifacts, that's allowed by default)
+permissions:
+  contents: read
+
+jobs:
+  make-dist-tarballs:
+    name: "Make Dist and Docs Tarballs, see workflow page for links"
+     # FIXME: Prepare/maintain a container image with pre-installed
+     #  NUT build/tooling prereqs (save about 3 minutes per run!)
+     #  Maybe https://aschmelyun.com/blog/using-docker-run-inside-of-github-actions/
+     #  => https://github.com/addnab/docker-run-action can help
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v5
+      with:
+        # NOTE: This is the unprivileged part of the GHA-01-tarballs ritual,
+        #  running potentially untrusted shell code from the PR source branch.
+        #  We are still dealing with the upstream repository (not a forked
+        #  repo), and in case of pull requests - fetch a separate scheme of
+        #  ephemerally provided refs for PR "merge" or "head" commits.
+        #
+        # 0 => all commit history for the PR
+        fetch-depth: 0
+        # Get the git tags to construct NUT SEMVER version strings.
+        fetch-tags: true
+        ref: ${{ inputs.ref }}
+        persist-credentials: false
+
+    - name: Try to get more Git metadata
+      run: |
+        git describe || true
+
+    - name: Debug gitlog2version processing
+      run: bash -x ./tools/gitlog2version.sh || true
+
+    - name: NUT CI Build Configuration
+      env:
+        compiler: 'CC=gcc CXX=g++'
+      run: |
+        PATH="/usr/lib/ccache:$PATH" ; export PATH
+        ./autogen.sh && \
+        ./configure --enable-warnings ${{env.compiler}} || true
+
+    - name: NUT CI Build to create "dist" tarball and related files
+      env:
+        compiler: 'CC=gcc CXX=g++'
+      run: |
+        PATH="/usr/lib/ccache:$PATH" ; export PATH
+        make -s -j 8 dist dist-hash || true
+
+    - name: CCache stats after distcheck
+      run: ccache -sv || ccache -s || echo "FAILED to read ccache info, oh well"
+
+    # NOTE: A `.zip` is added to the base `$name` automatically
+    - name: Upload tarball and its checksum artifacts
+      uses: actions/upload-artifact@v4
+      id: upload_artifact
+      with:
+        name: ${{ inputs.artifact_name }}
+        path: |
+          nut-*.tar*
+        compression-level: 0
+        overwrite: true
+
+    # FINISH: Pass control back to the main pipeline
