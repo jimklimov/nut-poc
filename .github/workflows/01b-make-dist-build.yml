@@ -55,7 +55,7 @@ jobs:
 
     - name: Upload build identifiers
       uses: actions/upload-artifact@v4
-      id: upload_artifact
+      id: upload_artifact_ci_refs
       with:
         name: ci-refs
         path: |
