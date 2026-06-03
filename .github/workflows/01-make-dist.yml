@@ -65,6 +65,7 @@ jobs:
       with:
         workflow: "GHA-01: Tarballs Build Worker"
         token: ${{ secrets.GITHUB_TOKEN }}
+        ref: ${{ github.event.pull_request.number > 0 && github.event.pull_request.base.ref || github.sha }}
         inputs: '{ "ref": "${{ github.event.pull_request.number > 0 && github.event.pull_request.head.sha || github.sha }}", "artifact_name": "NUT-tarballs-${{ steps.subst-github-ref-name.outputs.result }}" }'
         wait-timeout-seconds: 3600
         wait-for-completion: true
